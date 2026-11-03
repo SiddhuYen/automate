@@ -18,8 +18,28 @@ Contents: [Setup](#setup) · [Projects and threads](#projects-and-threads) · [G
 There's no download: you build Automate from this repo, which takes about five minutes. Nothing here needs a paid
 service besides your Claude plan.
 
-> **Setting this up with an AI agent?** Point it at this section. Steps marked **(you)** need the person at the Mac
-> (signing in, clicking macOS permission dialogs); everything else can run in Terminal. Don't use `sudo`.
+### Easiest: let Claude Code install it
+
+A claude.ai chat in the browser can't run anything on your Mac, so use Claude Code (you need it for Automate anyway).
+In Terminal:
+
+```bash
+curl -fsSL https://claude.ai/install.sh | bash   # installs Claude Code
+claude                                           # sign in with your Claude account the first time
+```
+
+Then tell it:
+
+> Install Automate from https://github.com/SiddhuYen/automate by following the Setup section of its README.
+
+It clones, builds and installs the app. You still click a few things yourself, because macOS only lets a person
+approve them: installing Apple's developer tools if a popup asks, allowing notifications on first launch, and
+right-click → Open if macOS says the app is from an unidentified developer.
+
+> **For the agent:** follow the steps below in order. Steps marked **(you)** need the person at the Mac (signing in,
+> clicking macOS permission dialogs); ask them and wait. Everything else can run in Terminal. Don't use `sudo`.
+
+### Step by step
 
 **You need:** a Mac on macOS 14 (Sonoma) or newer, and a Claude Pro or Max subscription.
 
