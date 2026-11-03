@@ -1,0 +1,10 @@
+.build/
+build/
+.swiftpm/
+*.xcodeproj/
+DerivedData/
+.DS_Store
+# Personal, never published: Claude worktrees, this repo's own project loops, secrets
+.claude/
+.automate/
+secrets.json
