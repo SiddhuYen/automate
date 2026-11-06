@@ -226,30 +226,46 @@ public final class ClaudeSession: @unchecked Sendable {
             }
         }
 
-        Task.detached {
+        // Read stdout on this session's own thread with plain read(2). Not FileHandle.bytes: every AsyncBytes
+        // in the app shares one actor that does blocking reads, so a quiet claude (thinking, or a background
+        // server holding its pipe open) stalled every other session's reading. A stalled pipe fills up, and
+        // the CLI drops whatever it still has buffered when it exits, so a turn with big tool results
+        // (screenshots) lost its last events and ended as "claude exited with status 0".
+        let reader = Thread {
             var sawResult = false
-            func handle(_ bytes: [UInt8]) {
+            func handle(_ bytes: ArraySlice<UInt8>) {
                 for event in ClaudeEventParser.parse(line: String(decoding: bytes, as: UTF8.self)) {
                     if case .result = event { sawResult = true }
                     cont.yield(event)
                 }
             }
-            // Split on "\n" bytes only. (AsyncBytes.lines also breaks on U+2028/U+2029, which can appear
-            // unescaped inside the CLI's JSON and would cut events in half.)
+            // Split on "\n" bytes only. (Line readers that also break on U+2028/U+2029 would cut events in
+            // half: those can appear unescaped inside the CLI's JSON.)
+            let fd = stdout.fileHandleForReading.fileDescriptor
+            var chunk = [UInt8](repeating: 0, count: 256 * 1024)
             var buffer: [UInt8] = []
-            do {
-                for try await byte in stdout.fileHandleForReading.bytes {
-                    if byte == 0x0A {
-                        handle(buffer)
-                        buffer.removeAll(keepingCapacity: true)
-                    } else {
-                        buffer.append(byte)
-                    }
+            while true {
+                let n = chunk.withUnsafeMutableBytes { read(fd, $0.baseAddress, $0.count) }
+                if n == 0 { break }
+                if n < 0 {
+                    if errno == EINTR { continue }
+                    cont.yield(.processError("Reading output failed: \(String(cString: strerror(errno)))"))
+                    break
                 }
-                if !buffer.isEmpty { handle(buffer) }
-            } catch {
-                cont.yield(.processError("Reading output failed: \(error.localizedDescription)"))
+                var start = 0
+                while let nl = chunk[start..<n].firstIndex(of: 0x0A) {
+                    if buffer.isEmpty {
+                        handle(chunk[start..<nl])
+                    } else {
+                        buffer.append(contentsOf: chunk[start..<nl])
+                        handle(buffer[...])
+                        buffer.removeAll(keepingCapacity: true)
+                    }
+                    start = nl + 1
+                }
+                buffer.append(contentsOf: chunk[start..<n])
             }
+            if !buffer.isEmpty { handle(buffer[...]) }
             process.waitUntilExit()
             stderr.fileHandleForReading.readabilityHandler = nil
             errBox.append(stderr.fileHandleForReading.readDataToEndOfFile())
@@ -266,6 +282,8 @@ public final class ClaudeSession: @unchecked Sendable {
             }
             cont.finish()
         }
+        reader.name = "claude stdout"
+        reader.start()
         return session
     }
 }

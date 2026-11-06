@@ -1157,3 +1157,42 @@ final class PhotonLiveTests: XCTestCase {
         }
     }
 }
+
+final class ClaudeSessionReaderTests: XCTestCase {
+    /// A quiet claude (thinking, or a background server holding its pipe) must not stall another session's
+    /// output. With FileHandle.bytes it did: all readers share one actor, and the stalled session's big tool
+    /// results overflowed the pipe and were lost.
+    func testQuietSessionDoesNotStallAnother() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("automate-reader-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let script = dir.appendingPathComponent("fake-claude")
+        try """
+        #!/bin/sh
+        read mode
+        echo '{"type":"system","subtype":"init","session_id":"s"}'
+        if [ "$mode" = quiet ]; then sleep 5; fi
+        printf '{"type":"assistant","message":{"content":[{"type":"text","text":"'
+        head -c 600000 /dev/zero | tr '\\0' x
+        printf '"}]}}\\n'
+        echo '{"type":"result","subtype":"success","is_error":false,"result":"ok"}'
+        """.write(to: script, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+        let location = ClaudeLocation(executable: script.path, path: "/usr/bin:/bin")
+
+        let quiet = try ClaudeSession.start(ClaudeRequest(prompt: "quiet\n", cwd: dir), location: location)
+        try await Task.sleep(nanoseconds: 300_000_000)
+        let started = Date()
+        let busy = try ClaudeSession.start(ClaudeRequest(prompt: "busy\n", cwd: dir), location: location)
+        var textLength = 0
+        var gotResult = false
+        for await event in busy.events {
+            if case .text(let t) = event { textLength = t.count }
+            if case .result = event { gotResult = true }
+        }
+        XCTAssertTrue(gotResult)
+        XCTAssertEqual(textLength, 600_000)
+        XCTAssertLessThan(Date().timeIntervalSince(started), 2.5, "the quiet session stalled the busy one")
+        for await _ in quiet.events {}
+    }
+}
