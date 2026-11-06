@@ -19,34 +19,46 @@ struct TranscriptView: View {
 
         ScrollViewReader { proxy in
             ScrollView {
-                // Not Lazy: a LazyVStack only measures rows as they scroll in, so the content height
-                // (and the scroll bar) kept jumping. Replies cache their measured size, so this stays cheap.
-                VStack(alignment: .leading, spacing: 10) {
-                    ForEach(items) { item in
-                        if newDay.contains(item.id) { DayDivider(date: item.date) }
-                        // Tool results are shown inside their tool call row.
-                        if item.kind == .toolResult, let id = item.toolUseId, toolUseIds.contains(id) {
-                            EmptyView()
-                        } else {
-                            TranscriptRow(item: item, result: item.toolUseId.flatMap { results[$0] },
-                                          showTime: timed.contains(item.id))
-                        }
-                    }
-                    if isRunning {
-                        HStack(spacing: 8) {
-                            ProgressView().controlSize(.small)
-                            Text("Working…").foregroundStyle(.secondary)
-                        }
-                    }
-                    Color.clear.frame(height: 1).id("bottom")
+                // Short threads use a plain VStack: a LazyVStack only measures rows as they scroll in, so the
+                // content height (and the scroll bar) jumps. Long ones must stay lazy, or opening them lays out
+                // every reply on the main thread at once and the app freezes for seconds.
+                if items.count > Self.eagerLimit {
+                    LazyVStack(alignment: .leading, spacing: 10) { rows(results: results, toolUseIds: toolUseIds, timed: timed, newDay: newDay) }
+                        .padding(16)
+                } else {
+                    VStack(alignment: .leading, spacing: 10) { rows(results: results, toolUseIds: toolUseIds, timed: timed, newDay: newDay) }
+                        .padding(16)
                 }
-                .padding(16)
             }
             .onAppear { proxy.scrollTo("bottom", anchor: .bottom) }
             .onChange(of: items.count) {
                 withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo("bottom", anchor: .bottom) }
             }
         }
+    }
+
+    /// Above this many items the transcript is built lazily (see body).
+    static let eagerLimit = 150
+
+    @ViewBuilder
+    private func rows(results: [String: TranscriptItem], toolUseIds: Set<String>, timed: Set<UUID>, newDay: Set<UUID>) -> some View {
+        ForEach(items) { item in
+            if newDay.contains(item.id) { DayDivider(date: item.date) }
+            // Tool results are shown inside their tool call row.
+            if item.kind == .toolResult, let id = item.toolUseId, toolUseIds.contains(id) {
+                EmptyView()
+            } else {
+                TranscriptRow(item: item, result: item.toolUseId.flatMap { results[$0] },
+                              showTime: timed.contains(item.id))
+            }
+        }
+        if isRunning {
+            HStack(spacing: 8) {
+                ProgressView().controlSize(.small)
+                Text("Working…").foregroundStyle(.secondary)
+            }
+        }
+        Color.clear.frame(height: 1).id("bottom")
     }
 }
 
