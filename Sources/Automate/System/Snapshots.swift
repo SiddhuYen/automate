@@ -17,10 +17,13 @@ enum Snapshots {
         let model = AppModel.shared
         model.bootstrapped = true // don't start timers, loops or messaging
         seed(model)
+        model.unreadThreadIds = Set(model.threads.filter { !$0.archived }.prefix(2).map(\.id))
 
         var shots: [(String, SidebarItem?, AnyView, CGSize)] = []
         let size = CGSize(width: 1180, height: 760)
-        shots.append(("inbox-card", nil, AnyView(InboxView()), CGSize(width: 760, height: 420)))
+        shots.append(("inbox-card", nil, AnyView(InboxView()), CGSize(width: 760, height: 720)))
+        shots.append(("unread", nil, AnyView(UnreadView()), CGSize(width: 760, height: 360)))
+        shots.append(("unread-list", nil, AnyView(UnreadThreadList(threads: model.unreadThreads).padding()), CGSize(width: 760, height: 260)))
         if let run = model.runs.first {
             shots.append(("card-only", nil, AnyView(ApprovalCard(run: run, showOpen: true).padding()), CGSize(width: 760, height: 420)))
             shots.append(("md-only", nil, AnyView(MarkdownText(run.summary).padding()), CGSize(width: 760, height: 300)))

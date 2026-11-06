@@ -45,6 +45,8 @@ final class MarkdownTextView: NSTextView {
     var actions: [MarkdownAction] = []
     private var copyButtons: [NSButton] = []
     private var buttonCode: [ObjectIdentifier: String] = [:]
+    /// Measured sizes by proposed width (-1 = no width); SwiftUI asks again on every layout pass.
+    private var sizeCache: [CGFloat: CGSize] = [:]
 
     init() {
         // An explicit NSLayoutManager keeps this on TextKit 1, which NSTextBlock/NSTextTable need.
@@ -71,6 +73,7 @@ final class MarkdownTextView: NSTextView {
     func setMarkdown(_ text: String) {
         guard text != markdown else { return }
         markdown = text
+        sizeCache.removeAll()
         textStorage?.setAttributedString(MarkdownAttributed.make(text))
         needsLayout = true
         invalidateIntrinsicContentSize()
@@ -79,10 +82,17 @@ final class MarkdownTextView: NSTextView {
     func fittingSize(width: CGFloat?) -> CGSize {
         guard let layoutManager, let textContainer else { return .zero }
         let w = width.flatMap { $0.isFinite && $0 > 0 ? $0 : nil }
+        if let cached = sizeCache[w ?? -1] { return cached }
         textContainer.containerSize = NSSize(width: w ?? 100_000, height: .greatestFiniteMagnitude)
         layoutManager.ensureLayout(for: textContainer)
         let used = layoutManager.usedRect(for: textContainer)
-        return CGSize(width: w ?? ceil(used.width), height: ceil(used.height))
+        let size = CGSize(width: w ?? ceil(used.width), height: ceil(used.height))
+        sizeCache[w ?? -1] = size
+        // Measuring at another width moved the live layout; put it back so what's shown doesn't reflow.
+        if bounds.width > 0, textContainer.containerSize.width != bounds.width {
+            textContainer.containerSize = NSSize(width: bounds.width, height: .greatestFiniteMagnitude)
+        }
+        return size
     }
 
     override func layout() {

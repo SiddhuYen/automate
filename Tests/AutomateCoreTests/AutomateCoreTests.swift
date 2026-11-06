@@ -1196,3 +1196,67 @@ final class ClaudeSessionReaderTests: XCTestCase {
         for await _ in quiet.events {}
     }
 }
+
+final class PhoneThreadTests: XCTestCase {
+    private func thread(_ title: String, texted ago: TimeInterval?, archived: Bool = false) -> ChatThread {
+        var t = ChatThread(title: title, projectId: nil, model: "sonnet", effort: "medium", permissionMode: .auto)
+        t.lastFromPhone = ago.map { Date().addingTimeInterval(-$0) }
+        t.archived = archived
+        return t
+    }
+
+    func testNextPhoneThreadIsMostRecentOtherOneOnPhone() {
+        let main = thread("main", texted: 10)
+        let older = thread("older", texted: 3_600)
+        let newer = thread("newer", texted: 60)
+        let stale = thread("stale", texted: 2 * 86_400)
+        let archived = thread("archived", texted: 5, archived: true)
+        let never = thread("never", texted: nil)
+        let all = [main, older, newer, stale, archived, never]
+        XCTAssertEqual(ChatThread.nextPhoneThread(after: main.id, in: all), newer.id)
+        XCTAssertNil(ChatThread.nextPhoneThread(after: main.id, in: [main, stale, archived, never]))
+    }
+}
+
+final class PasteKindTests: XCTestCase {
+    private func board(_ fill: (NSPasteboard) -> Void) -> NSPasteboard {
+        let pb = NSPasteboard(name: .init("automate-test-\(UUID().uuidString)"))
+        pb.clearContents()
+        fill(pb)
+        return pb
+    }
+    private var png: Data {
+        let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 2, pixelsHigh: 2, bitsPerSample: 8,
+                                   samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB,
+                                   bytesPerRow: 0, bitsPerPixel: 0)!
+        return rep.representation(using: .png, properties: [:])!
+    }
+
+    func testScreenshotIsImage() {
+        XCTAssertEqual(PasteKind.classify(board { $0.setData(png, forType: .png) }), .image)
+    }
+
+    func testCopyImageWithItsAddressIsImage() {
+        let pb = board {
+            $0.declareTypes([.png, .string], owner: nil)
+            $0.setData(png, forType: .png)
+            $0.setString("https://example.com/cat.png", forType: .string)
+        }
+        XCTAssertEqual(PasteKind.classify(pb), .image)
+    }
+
+    func testTextWithAPictureOfItselfIsText() {
+        let pb = board {
+            $0.declareTypes([.tiff, .string], owner: nil)
+            $0.setData(NSBitmapImageRep(data: png)!.tiffRepresentation!, forType: .tiff)
+            $0.setString("Some copied paragraph", forType: .string)
+        }
+        XCTAssertEqual(PasteKind.classify(pb), .text)
+        XCTAssertEqual(PasteKind.classify(board { $0.setString("hello", forType: .string) }), .text)
+    }
+
+    func testFinderFilesAreFiles() {
+        let url = URL(fileURLWithPath: "/tmp/notes.txt")
+        XCTAssertEqual(PasteKind.classify(board { $0.writeObjects([url as NSURL]) }), .files([url]))
+    }
+}

@@ -7,14 +7,15 @@ struct InboxView: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
+        let unread = model.unreadThreads
         Group {
-            if model.inbox.isEmpty {
+            if model.inbox.isEmpty && unread.isEmpty {
                 ScrollView {
                     VStack(spacing: 24) {
                         VStack(spacing: 6) {
                             Image(systemName: "tray").font(.system(size: 34)).foregroundStyle(.secondary)
                             Text("Nothing needs you").font(.title3.weight(.semibold))
-                            Text("When a loop wants your OK before acting, it shows up here and as a notification.")
+                            Text("New replies in your threads, and loops that want your OK before acting, show up here.")
                                 .foregroundStyle(.secondary)
                         }
                         .padding(.top, 40)
@@ -27,9 +28,25 @@ struct InboxView: View {
                 }
             } else {
                 ScrollView {
-                    LazyVStack(spacing: 14) {
-                        ForEach(model.inbox) { run in
-                            ApprovalCard(run: run, showOpen: true)
+                    LazyVStack(alignment: .leading, spacing: 14) {
+                        InboxSectionHeader(title: "Threads", systemImage: "bubble.left", count: unread.count) {
+                            if !unread.isEmpty {
+                                Button("Mark All as Read") { model.unreadThreadIds.removeAll() }
+                            }
+                        }
+                        if unread.isEmpty {
+                            Text("No unread threads").foregroundStyle(.secondary)
+                        } else {
+                            UnreadThreadList(threads: unread)
+                        }
+                        InboxSectionHeader(title: "Loops", systemImage: "arrow.triangle.2.circlepath", count: model.inbox.count) {}
+                            .padding(.top, 8)
+                        if model.inbox.isEmpty {
+                            Text("No loops waiting for your OK").foregroundStyle(.secondary)
+                        } else {
+                            ForEach(model.inbox) { run in
+                                ApprovalCard(run: run, showOpen: true)
+                            }
                         }
                         TodayOverview().padding(.top, 10)
                     }
@@ -38,6 +55,116 @@ struct InboxView: View {
             }
         }
         .navigationTitle("Inbox")
+    }
+}
+
+struct InboxSectionHeader<Accessory: View>: View {
+    let title: String
+    let systemImage: String
+    let count: Int
+    @ViewBuilder let accessory: Accessory
+
+    var body: some View {
+        HStack {
+            Label(title, systemImage: systemImage).font(.title3.weight(.semibold))
+            if count > 0 {
+                Text("\(count)").font(.callout.monospacedDigit()).foregroundStyle(.secondary)
+            }
+            Spacer()
+            accessory.buttonStyle(.link)
+        }
+    }
+}
+
+// MARK: - Unread
+
+/// Threads with replies you haven't opened (or that you marked unread).
+struct UnreadView: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        let unread = model.unreadThreads
+        Group {
+            if unread.isEmpty {
+                ContentUnavailableView("No unread threads", systemImage: "circle.badge",
+                                       description: Text("When Claude answers in a thread you're not looking at, it shows up here. Right-click a thread to mark it unread."))
+            } else {
+                ScrollView {
+                    UnreadThreadList(threads: unread).padding(16)
+                }
+            }
+        }
+        .navigationTitle("Unread")
+        .toolbar {
+            if !unread.isEmpty {
+                Button("Mark All as Read") { model.unreadThreadIds.removeAll() }
+            }
+        }
+    }
+}
+
+struct UnreadThreadList: View {
+    let threads: [ChatThread]
+
+    var body: some View {
+        LazyVStack(spacing: 8) {
+            ForEach(threads) { UnreadThreadCard(thread: $0) }
+        }
+    }
+}
+
+struct UnreadThreadCard: View {
+    @Environment(AppModel.self) private var model
+    let thread: ChatThread
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Circle().fill(Color.accentColor).frame(width: 8, height: 8).padding(.top, 6)
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    Text(thread.title).font(.headline).lineLimit(1)
+                    if let project = model.project(for: thread) {
+                        Text(project.name).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                    Spacer(minLength: 8)
+                    Text(thread.updatedAt, style: .relative).font(.caption).foregroundStyle(.secondary)
+                }
+                if let snippet = Self.lastReply(in: thread) {
+                    Text(snippet).foregroundStyle(.secondary).lineLimit(2)
+                }
+            }
+            Button { model.setUnread(thread.id, false) } label: {
+                Image(systemName: "checkmark.circle").accessibilityLabel("Mark as Read")
+            }
+            .buttonStyle(.borderless)
+            .help("Mark as Read")
+        }
+        .padding(12)
+        .background(Color.secondary.opacity(0.07), in: RoundedRectangle(cornerRadius: 10))
+        .contentShape(RoundedRectangle(cornerRadius: 10))
+        .onTapGesture { model.selection = .thread(thread.id) }
+        .contextMenu {
+            Button("Open") { model.selection = .thread(thread.id) }
+            Button("Mark as Read") { model.setUnread(thread.id, false) }
+        }
+    }
+
+    /// Claude's last message as plain prose on one line (headings, tables and code blocks left out).
+    static func lastReply(in thread: ChatThread) -> String? {
+        guard let item = thread.items.last(where: { $0.kind == .assistant || $0.kind == .error }) else { return nil }
+        var inCode = false
+        var parts: [String] = []
+        for raw in item.text.split(whereSeparator: \.isNewline) {
+            var line = raw.trimmingCharacters(in: .whitespaces)
+            if line.hasPrefix("```") { inCode.toggle(); continue }
+            if inCode || line.isEmpty || line.hasPrefix("|") || line.hasPrefix("#") { continue }
+            for prefix in ["> ", "- ", "* ", "+ "] where line.hasPrefix(prefix) { line.removeFirst(prefix.count) }
+            parts.append(line)
+            if parts.joined().count > 300 { break }
+        }
+        let text = parts.joined(separator: " ")
+            .replacingOccurrences(of: "**", with: "").replacingOccurrences(of: "`", with: "")
+        return text.isEmpty ? nil : String(text.prefix(300))
     }
 }
 

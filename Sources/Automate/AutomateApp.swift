@@ -116,6 +116,8 @@ struct AutomateCommands: Commands {
                 .keyboardShortcut("1")
             Button("Activity") { model.selection = .activity }
                 .keyboardShortcut("2")
+            Button("Unread") { model.selection = .unread }
+                .keyboardShortcut("3")
         }
     }
 }

@@ -13,7 +13,7 @@ struct HelpView: View {
         ("⇧⌘O", "Add a project folder"),
         ("⇧⌘L", "New loop from a description"),
         ("⇧⌘I", "Continue a Claude Code session"),
-        ("⌘1 / ⌘2", "Inbox / Activity"),
+        ("⌘1 / ⌘2 / ⌘3", "Inbox / Activity / Unread"),
         ("⌘↩", "Send (or Return, if you turned that on)"),
         ("⌘.", "Stop Claude"),
         ("⌘S", "Save a loop or memory file"),

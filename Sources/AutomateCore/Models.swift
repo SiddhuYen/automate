@@ -110,6 +110,13 @@ public struct ChatThread: Codable, Identifiable, Hashable, Sendable {
     /// In use from your phone: texted within the last day.
     public var isOnPhone: Bool { lastFromPhone.map { Date().timeIntervalSince($0) < 86_400 } ?? false }
 
+    /// Where texts from your phone go once you stop using `threadId` from it: the other thread you
+    /// used from your phone most recently, or nil (the next text starts a new thread).
+    public static func nextPhoneThread(after threadId: UUID, in threads: [ChatThread]) -> UUID? {
+        threads.filter { $0.id != threadId && !$0.archived && $0.isOnPhone }
+            .max { ($0.lastFromPhone ?? .distantPast) < ($1.lastFromPhone ?? .distantPast) }?.id
+    }
+
     public init(title: String, projectId: UUID?, model: String, effort: String, permissionMode: PermissionMode) {
         self.id = UUID()
         self.title = title

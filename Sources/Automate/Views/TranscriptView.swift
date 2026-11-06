@@ -19,7 +19,9 @@ struct TranscriptView: View {
 
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 10) {
+                // Not Lazy: a LazyVStack only measures rows as they scroll in, so the content height
+                // (and the scroll bar) kept jumping. Replies cache their measured size, so this stays cheap.
+                VStack(alignment: .leading, spacing: 10) {
                     ForEach(items) { item in
                         if newDay.contains(item.id) { DayDivider(date: item.date) }
                         // Tool results are shown inside their tool call row.

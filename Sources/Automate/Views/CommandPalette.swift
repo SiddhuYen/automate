@@ -122,6 +122,9 @@ struct CommandPalette: View {
         out.append(Entry(id: "activity", title: "Activity", subtitle: "Loop run history", icon: "clock.arrow.circlepath") {
             model.selection = .activity
         })
+        out.append(Entry(id: "unread", title: "Unread", subtitle: model.unreadThreads.isEmpty ? "Threads with new replies" : "\(model.unreadThreads.count) unread", icon: "circle.badge") {
+            model.selection = .unread
+        })
         out.append(Entry(id: "messages", title: "Messages", subtitle: "Texts to and from your phone", icon: "message") {
             model.selection = .messages
         })

@@ -143,6 +143,10 @@ struct ThreadHeader: View {
                         model.remoteThreadId = thread.id
                     }
                 }
+                if model.remoteThreadId == thread.id || thread.isOnPhone {
+                    Button("Stop Continuing on Phone") { model.stopContinuingOnPhone(thread.id) }
+                        .help("Removes the phone icon; your texts go to the next thread you've used from your phone")
+                }
                 Divider()
                 Button(thread.archived ? "Unarchive" : "Archive") { model.updateThread(thread.id) { $0.archived.toggle() } }
                 Divider()
@@ -183,6 +187,8 @@ struct ComposerView: View {
     @Environment(AppModel.self) private var model
     let threadId: UUID
     @State private var dropTargeted = false
+    @FocusState private var editorFocused: Bool
+    @State private var pasteMonitor: Any?
     @State private var pickingTime = false
     @State private var pickedDate = Date().addingTimeInterval(3600)
 
@@ -246,6 +252,7 @@ struct ComposerView: View {
 
             ZStack(alignment: .topLeading) {
                 TextEditor(text: text)
+                    .focused($editorFocused)
                     .font(.body)
                     .scrollContentBackground(.hidden)
                     .frame(height: Self.editorHeight(for: text.wrappedValue))
@@ -269,6 +276,11 @@ struct ComposerView: View {
             .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
             .overlay(RoundedRectangle(cornerRadius: 10)
                 .stroke(dropTargeted ? Color.accentColor : Color.secondary.opacity(0.25), lineWidth: dropTargeted ? 2 : 1))
+            .onAppear(perform: watchPaste)
+            .onDisappear {
+                if let pasteMonitor { NSEvent.removeMonitor(pasteMonitor) }
+                pasteMonitor = nil
+            }
             .dropDestination(for: URL.self) { urls, _ in
                 let paths = urls.filter(\.isFileURL).compactMap { model.attachmentPath(for: $0, in: threadId) }
                 guard !paths.isEmpty else { return false }
@@ -349,10 +361,11 @@ struct ComposerView: View {
 
                 Menu {
                     Button("Choose Files…") { chooseFiles() }
+                    // Not .disabled(…): that would check the clipboard when the view last redrew, not now.
                     Button("Paste Image from Clipboard") {
                         if let p = model.pasteImageAttachment() { insert([p]) }
+                        else { model.banner = "There's no image on the clipboard. Take a screenshot with ⌃⇧⌘4, then try again." }
                     }
-                    .disabled(!NSPasteboard.general.canReadObject(forClasses: [NSImage.self], options: nil))
                 } label: {
                     Image(systemName: "paperclip").accessibilityLabel("Attach")
                 }
@@ -420,6 +433,20 @@ struct ComposerView: View {
         let current = model.drafts[threadId] ?? ""
         let sep = current.isEmpty || current.hasSuffix(" ") || current.hasSuffix("\n") ? "" : " "
         model.drafts[threadId] = current + sep + quoted.joined(separator: " ") + " "
+    }
+
+    /// The text box only pastes text, so catch ⌘V first when the clipboard holds an image or copied files.
+    /// (A local monitor sees the key before the Edit menu's Paste does.)
+    private func watchPaste() {
+        guard pasteMonitor == nil else { return }
+        pasteMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            guard editorFocused,
+                  event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command,
+                  event.charactersIgnoringModifiers == "v",
+                  let paths = model.pastedAttachments(in: threadId) else { return event }
+            insert(paths)
+            return nil
+        }
     }
 
     private func chooseFiles() {

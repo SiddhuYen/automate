@@ -92,6 +92,8 @@ struct DetailView: View {
             ThreadView(threadId: id).id(id)
         case .memory(let id):
             MemoryView(projectId: id).id(id)
+        case .unread:
+            UnreadView()
         case .messages:
             MessagesView()
         case .running:
@@ -246,6 +248,9 @@ struct SidebarView: View {
                     .tag(SidebarItem.inbox)
                 Label("Activity", systemImage: "clock.arrow.circlepath")
                     .tag(SidebarItem.activity)
+                Label("Unread", systemImage: "circle.badge")
+                    .badge(model.unreadThreads.count)
+                    .tag(SidebarItem.unread)
                 if model.runningLoopCount + model.runningThreadIds.count > 0 {
                     Label("Running", systemImage: "bolt.fill")
                         .badge(model.runningLoopCount + model.runningThreadIds.count)
@@ -376,10 +381,18 @@ struct ThreadRow: View {
             }
         }
         .contextMenu {
+            if model.unreadThreadIds.contains(thread.id) {
+                Button("Mark as Read") { model.setUnread(thread.id, false) }
+            } else {
+                Button("Mark as Unread") { model.setUnread(thread.id, true) }
+            }
             Button(thread.pinned ? "Unpin" : "Pin") { model.updateThread(thread.id) { $0.pinned.toggle() } }
             Button(thread.archived ? "Unarchive" : "Archive") { model.updateThread(thread.id) { $0.archived.toggle() } }
             if model.messaging.canReceive, model.remoteThreadId != thread.id {
                 Button("Use for Texts from Phone") { model.remoteThreadId = thread.id }
+            }
+            if model.remoteThreadId == thread.id || thread.isOnPhone {
+                Button("Stop Continuing on Phone") { model.stopContinuingOnPhone(thread.id) }
             }
             Divider()
             Button("Delete", role: .destructive) { model.deleteThread(thread.id) }

@@ -11,6 +11,7 @@ enum SidebarItem: Hashable {
     case memory(UUID)
     case messages
     case running
+    case unread
 }
 
 @MainActor
@@ -26,10 +27,13 @@ final class AppModel {
     var runs: [LoopRun] = []
     var loopState = Store.LoopState()
     var selection: SidebarItem? = .inbox {
-        didSet { if case let .thread(id)? = selection { unreadThreadIds.remove(id) } }
+        didSet { if case let .thread(id)? = selection, unreadThreadIds.contains(id) { unreadThreadIds.remove(id) } }
     }
     /// Threads that finished while you were looking at something else.
-    var unreadThreadIds: Set<UUID> = []
+    /// Threads with a reply you haven't opened, or that you marked unread. Kept across launches.
+    var unreadThreadIds: Set<UUID> = Set((AppDefaults.shared.stringArray(forKey: "unreadThreadIds") ?? []).compactMap(UUID.init)) {
+        didSet { AppDefaults.shared.set(unreadThreadIds.map(\.uuidString), forKey: "unreadThreadIds") }
+    }
     /// Sidebar sections you've collapsed ("research", "loops", or a project id).
     var collapsedSections: Set<String> = Set(AppDefaults.shared.stringArray(forKey: "collapsedSections") ?? []) {
         didSet { AppDefaults.shared.set(Array(collapsedSections), forKey: "collapsedSections") }
@@ -169,6 +173,8 @@ final class AppModel {
 
         projects = store.loadProjects()
         threads = store.loadThreads()
+        let threadIds = Set(threads.map(\.id))
+        if !unreadThreadIds.isSubset(of: threadIds) { unreadThreadIds.formIntersection(threadIds) }
         store.pruneRuns(olderThan: 90)
         store.emptyTrash(olderThan: 30)
         runs = store.loadRuns()
@@ -1139,6 +1145,15 @@ final class AppModel {
         return store.scratchDir
     }
 
+    /// Unread, not archived threads, newest first.
+    var unreadThreads: [ChatThread] {
+        threads.filter { unreadThreadIds.contains($0.id) && !$0.archived }.sorted { $0.updatedAt > $1.updatedAt }
+    }
+
+    func setUnread(_ id: UUID, _ unread: Bool) {
+        if unread { unreadThreadIds.insert(id) } else { unreadThreadIds.remove(id) }
+    }
+
     func updateThread(_ id: UUID, _ change: (inout ChatThread) -> Void) {
         guard let i = threads.firstIndex(where: { $0.id == id }) else { return }
         change(&threads[i])
@@ -1151,6 +1166,7 @@ final class AppModel {
         guard let t = threads.first(where: { $0.id == id }) else { return }
         store.delete(t)
         threads.removeAll { $0.id == id }
+        unreadThreadIds.remove(id)
         if selection == .thread(id) { selection = .inbox }
         undo = UndoAction(text: "Deleted \"\(t.title)\"") { [weak self] in
             guard let self, let restored = self.store.restoreThread(id: id) else { return }
@@ -1442,9 +1458,19 @@ final class AppModel {
         }
     }
 
+    /// ⌘V in the message box: files copied in Finder or an image (screenshot, "Copy Image") become attachments.
+    /// Returns nil when it's ordinary text, so the text box pastes it as usual.
+    func pastedAttachments(in threadId: UUID, from pb: NSPasteboard = .general) -> [String]? {
+        switch PasteKind.classify(pb) {
+        case .files(let urls): return urls.compactMap { attachmentPath(for: $0, in: threadId) }
+        case .image: return pasteImageAttachment(from: pb).map { [$0] } ?? []
+        case .text: return nil
+        }
+    }
+
     /// Save the clipboard's image (e.g. a screenshot) as a PNG attachment.
-    func pasteImageAttachment() -> String? {
-        guard let image = NSImage(pasteboard: .general),
+    func pasteImageAttachment(from pb: NSPasteboard = .general) -> String? {
+        guard let image = NSImage(pasteboard: pb),
               let tiff = image.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff),
               let png = rep.representation(using: .png, properties: [:]) else { return nil }
         let name = "screenshot-\(Date().formatted(.iso8601.year().month().day().time(includingFractionalSeconds: false)).replacingOccurrences(of: ":", with: "")).png"
@@ -1489,6 +1515,16 @@ final class AppModel {
         let last = t.items.last { $0.kind == .assistant }.map { RemoteText.clip(RemoteText.plain($0.text), limit: 1500) }
         messaging.send(OutgoingMessage(text: "📱 Continuing \"\(t.title)\" here. Reply to keep going." + (last.map { "\n\nLast reply:\n" + $0 } ?? ""),
                                        isChatReply: true, threadId: threadId))
+    }
+
+    /// Done with this thread on the phone: its phone icon goes away, and if your texts were going here
+    /// they go to the next thread you've used from your phone (or a new one). Swipe-replying to one of
+    /// its old texts picks it up again.
+    func stopContinuingOnPhone(_ threadId: UUID) {
+        updateThread(threadId) { $0.lastFromPhone = nil }
+        if remoteThreadId == threadId {
+            remoteThreadId = ChatThread.nextPhoneThread(after: threadId, in: threads)
+        }
     }
 
     /// A thread that works in a loop's notes folder, to ask about (or tidy) what the loop has collected.
@@ -1631,6 +1667,7 @@ final class AppModel {
         case let .open(page, id):
             switch page {
             case "activity": selection = .activity
+            case "unread": selection = .unread
             case "loop": if let id { selection = .loop(id) }
             case "thread": if let id = id.flatMap(UUID.init) { selection = .thread(id) }
             case "run": if let id = id.flatMap(UUID.init) { selection = .run(id) }
@@ -1729,3 +1766,4 @@ final class AppModel {
         }
     }
 }
+
