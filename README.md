@@ -140,6 +140,14 @@ In a project thread, **Own branch** (before the first message) puts the thread i
 that the default. **Continue a Claude Code Session** (⇧⌘I) picks up a session you started in Terminal or your
 editor, with its history, so you can keep going here or from your phone.
 
+**Coordinator threads.** Switch on **Coordinator** under a thread's message box and it can hand coding tasks to
+threads in your projects: tell it what you want done across them, and it writes one task per project. When its
+reply ends, Automate starts those threads (with each project's own permission and branch settings). Each thread's
+final answer comes back to the coordinator as a message, and the coordinator decides what's next: more
+instructions for that thread, new tasks, or a summary for you. You can open and chat in any of those threads as usual;
+only the turns the coordinator asked for report back. A coordinator can hand out up to 25 tasks per message you send
+it, so it can't keep itself busy forever.
+
 Ask any thread for something recurring or later ("every weekday at 7 send me the top AI news", "remind me at 5pm
 to call the bank") and Claude sets it up as a loop. Or, after doing something by hand, use **Turn into Loop…** in the
 thread's ⋯ menu. Threads can only add new loops, never change yours.

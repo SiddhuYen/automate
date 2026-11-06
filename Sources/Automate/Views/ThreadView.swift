@@ -313,6 +313,15 @@ struct ComposerView: View {
                 .toggleStyle(.button)
                 .help("Let Claude use your Chrome through the Claude in Chrome extension. Chrome must be open. Works in Auto and Bypass; Plan and Accept edits block it.")
 
+                Toggle(isOn: Binding(
+                    get: { thread?.isCoordinator ?? false },
+                    set: { v in model.updateThread(threadId) { $0.isCoordinator = v ? true : nil } }
+                )) {
+                    Label("Coordinator", systemImage: "point.3.connected.trianglepath.dotted")
+                }
+                .toggleStyle(.button)
+                .help("Let this thread hand tasks to new threads in your projects. Each one's answer comes back here, and this thread can send it more instructions. Up to \(Dispatch.budget) tasks per message you send it.")
+
                 Menu {
                     let isProject = thread?.projectId != nil
                     ForEach(model.settings.prompts.filter { isProject || !$0.forProjects }) { p in

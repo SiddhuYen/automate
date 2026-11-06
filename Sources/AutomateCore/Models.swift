@@ -102,6 +102,10 @@ public struct ChatThread: Codable, Identifiable, Hashable, Sendable {
     public var scheduled: [ScheduledMessage]?
     /// When you last texted this thread from your phone (or handed it to your phone).
     public var lastFromPhone: Date?
+    /// Coordinator: may hand tasks to threads in your projects (see `Dispatch`).
+    public var isCoordinator: Bool?
+    /// The coordinator thread that started this one; its dispatched turns report back there.
+    public var reportsTo: UUID?
 
     /// In use from your phone: texted within the last day.
     public var isOnPhone: Bool { lastFromPhone.map { Date().timeIntervalSince($0) < 86_400 } ?? false }

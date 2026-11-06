@@ -41,6 +41,11 @@ struct AccessSettingsView: View {
                 }
                 AccessRow("Threads may set up loops", s.threadsCanMakeLoops ? "Yes (they arrive switched off for review)" : "No")
                 AccessRow("Project threads on their own git branch", s.worktreeByDefault ? "Yes" : "No")
+                let coordinators = model.threads.filter { !$0.archived && $0.isCoordinator == true }
+                AccessRow("Coordinator threads (start threads in your projects)",
+                          coordinators.isEmpty ? "None" : coordinators.map(\.title).prefix(5).joined(separator: ", "),
+                          tone: coordinators.isEmpty ? .normal : .warn,
+                          detail: "Each can hand out up to \(Dispatch.budget) tasks per message you send it. To change: the Coordinator button under that thread's message box.")
                 HowTo("Default: General tab → New threads. One project: right-click it in the sidebar → Project Settings…. One thread: the Permissions picker in that thread's settings.") {
                     Button("Open General") { tab = .general }
                 }

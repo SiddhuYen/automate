@@ -32,6 +32,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             SelfTest.run()
             return
         }
+        if CommandLine.arguments.contains("--coordtest") {
+            SelfTest.run(only: SelfTest.coordinator)
+            return
+        }
         #endif
         NSApp.setActivationPolicy(.regular)
         NSApp.servicesProvider = serviceProvider

@@ -22,7 +22,7 @@ enum SelfTest {
         return false
     }
 
-    static func run() {
+    static func run(only: (@MainActor (AppModel) async -> Void)? = nil) {
         guard ProcessInfo.processInfo.environment["AUTOMATE_DATA_DIR"] != nil else {
             print("Set AUTOMATE_DATA_DIR to a scratch folder first.")
             exit(1)
@@ -36,7 +36,12 @@ enum SelfTest {
         model.settings.streamReplies = true
         model.settings.messaging = MessagingSettings()
         Task { @MainActor in
-            await steps(model)
+            if let only {
+                model.detectedClaude = ClaudeLocator.locate()
+                await only(model)
+            } else {
+                await steps(model)
+            }
             print(failures == 0 ? "ALL PASSED" : "\(failures) FAILED")
             exit(failures == 0 ? 0 : 1)
         }
@@ -125,6 +130,48 @@ enum SelfTest {
         }
     }
 
+    /// `--coordtest` (also part of `--selftest`): a coordinator hands a task to a project thread, gets its report,
+    /// and sends that thread a follow-up.
+    static func coordinator(_ model: AppModel) async {
+        let dir = model.store.root.appendingPathComponent("selftest-coord-project")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        var project = Project(path: dir.path)
+        project.name = "coordproj"
+        model.projects.append(project)
+        let c = model.createThread(projectId: nil, select: false)
+        model.updateThread(c) { $0.isCoordinator = true }
+        model.send("""
+        Hand exactly one task to the project coordproj, titled "Echo", whose message is: \
+        "Reply with exactly the word: kumquat". When its report arrives, hand that same thread (use its id) one more \
+        task whose message is: "Reply with exactly the word: persimmon". When that second report arrives, reply with \
+        exactly the word: finished. Don't do anything else.
+        """, in: c)
+        let all = await waitUntil(300) {
+            let child = model.threads.first { $0.reportsTo == c }
+            let childDone = child.map { !model.runningThreadIds.contains($0.id) && model.queuedMessages[$0.id] == nil } ?? false
+            let reports = model.threads.first { $0.id == c }?.items.filter { $0.kind == .user && Dispatch.isReport($0.text) }.count ?? 0
+            return childDone && reports >= 2 && !model.runningThreadIds.contains(c) && model.queuedMessages[c] == nil
+        }
+        let coord = model.threads.first { $0.id == c }!
+        let children = model.threads.filter { $0.reportsTo == c }
+        print("      coordinator items: \(coord.items.filter { $0.kind != .toolResult }.map { "\($0.kind.rawValue): \($0.text.prefix(90))" })")
+        check(all, "coordinator got two reports and finished")
+        check(children.count == 1, "exactly one thread started (\(children.count))")
+        if let child = children.first {
+            let replies = child.items.filter { $0.kind == .assistant }.map(\.text)
+            print("      child: \(child.title) in \(model.project(for: child)?.name ?? "?"), replies \(replies)")
+            check(child.projectId == project.id && child.title == "Echo", "it's in the named project with the given title")
+            check(replies.first?.lowercased().contains("kumquat") == true && replies.last?.lowercased().contains("persimmon") == true,
+                  "the follow-up went to the same thread")
+        }
+        let reports = coord.items.filter { $0.kind == .user && Dispatch.isReport($0.text) }.map(\.text)
+        check(reports.first?.lowercased().contains("kumquat") == true, "the report carries the thread's answer")
+        check(coord.items.last(where: { $0.kind == .assistant })?.text.lowercased().contains("finished") == true,
+              "coordinator wrapped up")
+        let leftovers = (try? FileManager.default.contentsOfDirectory(atPath: model.store.dispatchDir(for: c).path)) ?? []
+        check(leftovers.isEmpty, "outbox emptied")
+    }
+
     static func steps(_ model: AppModel) async {
         model.detectedClaude = ClaudeLocator.locate()
         check(model.claude != nil, "found claude")
@@ -133,6 +180,7 @@ enum SelfTest {
         _ = await waitUntil(30) { model.auth != nil }
         check(model.auth?.loggedIn == true && model.auth?.usesSubscription == true,
               "signed in on a subscription (\(model.auth?.method ?? "?"), \(model.auth?.plan ?? "?"))")
+        await coordinator(model)
 
         // 1. Chat with streaming + a queued follow-up.
         let t = model.createThread(projectId: nil, select: false)

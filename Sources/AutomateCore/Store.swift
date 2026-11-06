@@ -12,6 +12,7 @@ import Foundation
 ///   loop-state.json      when each loop last ran
 ///   scratch/             working folder for research threads
 ///   attachments/         files you attached to messages
+///   dispatch/<id>/       tasks a coordinator thread is handing out, waiting to be started
 ///   trash/               deleted threads, kept 30 days
 ///
 /// Loops can also live inside a project, so they travel with it:
@@ -32,6 +33,10 @@ public final class Store: @unchecked Sendable {
     public var incomingLoopsDir: URL { root.appendingPathComponent("loops-new", isDirectory: true) }
     /// Files you attach to a message (copied here so every thread can read them).
     public var attachmentsDir: URL { root.appendingPathComponent("attachments", isDirectory: true) }
+    /// Where a coordinator thread writes the tasks it hands out (one folder per thread).
+    public func dispatchDir(for threadId: UUID) -> URL {
+        root.appendingPathComponent("dispatch", isDirectory: true).appendingPathComponent(threadId.uuidString, isDirectory: true)
+    }
 
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder

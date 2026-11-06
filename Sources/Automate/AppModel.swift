@@ -76,7 +76,12 @@ final class AppModel {
         var replyVia: MessageChannel?
         /// The text on your phone to answer (see `remoteAnchors`).
         var anchor: String?
+        /// Handed out by this coordinator thread: the reply goes back there.
+        var reportTo: UUID?
     }
+
+    /// Tasks each coordinator thread may still hand out before you write to it again (see `Dispatch.budget`).
+    @ObservationIgnored var dispatchBudget: [UUID: Int] = [:]
 
     /// Skills Claude reported at the start of the latest session, for "skills" / "skill <name>" by text.
     @ObservationIgnored var knownSkills: [String] = AppDefaults.shared.stringArray(forKey: "knownSkills") ?? [] {
@@ -1163,13 +1168,16 @@ final class AppModel {
 
     /// Send a message in a thread. If Claude is still busy there, it's queued and goes out when it finishes.
     /// `replyVia`: also text Claude's answer to your phone, as a reply to `anchor` (default: the text being handled).
-    func send(_ text: String, in threadId: UUID, replyVia: MessageChannel? = nil, anchor: String? = nil) {
+    /// `reportTo`: a coordinator thread handed this out; Claude's answer is sent back there as a message.
+    func send(_ text: String, in threadId: UUID, replyVia: MessageChannel? = nil, anchor: String? = nil,
+              reportTo: UUID? = nil) {
         let message = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !message.isEmpty, let i = threads.firstIndex(where: { $0.id == threadId }) else { return }
         let anchor = replyVia.flatMap { anchor ?? messaging.incomingId(on: $0) }
         if let replyVia, let anchor { messaging.linkIncoming(anchor, on: replyVia, to: .thread(threadId)) }
         if runningThreadIds.contains(threadId) {
-            queuedMessages[threadId, default: []].append(QueuedMessage(text: message, replyVia: replyVia, anchor: anchor))
+            queuedMessages[threadId, default: []].append(QueuedMessage(text: message, replyVia: replyVia, anchor: anchor,
+                                                                       reportTo: reportTo))
             return
         }
         guard let location = claude else {
@@ -1213,6 +1221,20 @@ final class AppModel {
         if settings.threadsCanMakeLoops {
             system.append(LoopWriter.threadPrompt(newLoopsDir: store.incomingLoopsDir, projectPath: project(for: thread)?.path))
             request.addDirs.append(store.incomingLoopsDir)
+        }
+        if thread.isCoordinator == true {
+            // Your own messages give it a fresh task budget; Automate's (reports, problems) don't.
+            if !message.hasPrefix("[Automate]") { dispatchBudget[threadId] = Dispatch.budget }
+            let outbox = store.dispatchDir(for: threadId)
+            try? FileManager.default.createDirectory(at: outbox, withIntermediateDirectories: true)
+            request.addDirs.append(outbox)
+            let children = threads.filter { $0.reportsTo == threadId }.map {
+                Dispatch.ThreadSummary(id: $0.id, title: $0.title, project: project(for: $0)?.name,
+                                       running: runningThreadIds.contains($0.id))
+            }
+            system.append(Dispatch.coordinatorPrompt(outbox: outbox, projects: projects.map { ($0.name, $0.path) },
+                                                     threads: children,
+                                                     budgetLeft: dispatchBudget[threadId] ?? Dispatch.budget))
         }
         if !system.isEmpty { request.appendSystemPrompt = system.joined(separator: "\n\n") }
         if let project = project(for: thread) { attachMemory(of: project, to: &request) }
@@ -1270,7 +1292,13 @@ final class AppModel {
             let finalText = outcome.finalText ?? "Finished"
             let stopped = session.wasCancelled
             if self.selection != .thread(threadId) { self.unreadThreadIds.insert(threadId) }
-            if !replyChannels.isEmpty {
+            if let coordinator = reportTo {
+                // A handed-out task: the answer goes back to the coordinator, which tells you (no ping per task).
+                let t = self.threads[idx]
+                self.send(Dispatch.report(title: t.title, threadId: threadId, project: self.project(for: t)?.name,
+                                          text: finalText, stopped: stopped, failed: outcome.isError),
+                          in: coordinator)
+            } else if !replyChannels.isEmpty {
                 let reply = stopped ? "⏹ Stopped." : RemoteText.plain(finalText)
                 self.messaging.send(OutgoingMessage(text: (outcome.isError && !stopped ? "⚠️ " : "") + reply, isChatReply: true,
                                                     markdown: stopped || outcome.isError ? nil : finalText, threadId: threadId,
@@ -1280,7 +1308,8 @@ final class AppModel {
                 self.messaging.send(OutgoingMessage(text: "💬 \(self.threads[idx].title)\n\n" + RemoteText.clip(RemoteText.plain(finalText), limit: 1500),
                                                     unsolicited: true, threadId: threadId))
             }
-            if self.settings.notifyWhenThreadFinishesInBackground, !NSApp.isActive {
+            if self.threads[idx].isCoordinator == true { self.startDispatchedTasks(from: threadId) }
+            if reportTo == nil, self.settings.notifyWhenThreadFinishesInBackground, !NSApp.isActive {
                 Notifier.shared.post(title: self.threads[idx].title,
                                      body: RemoteText.plain(finalText),
                                      targetId: threadId.uuidString, needsApproval: false, isThread: true)
@@ -1294,7 +1323,7 @@ final class AppModel {
             } else if var queue = self.queuedMessages[threadId], !queue.isEmpty {
                 let next = queue.removeFirst()
                 self.queuedMessages[threadId] = queue.isEmpty ? nil : queue
-                self.send(next.text, in: threadId, replyVia: next.replyVia, anchor: next.anchor)
+                self.send(next.text, in: threadId, replyVia: next.replyVia, anchor: next.anchor, reportTo: next.reportTo)
                 // If that couldn't start, nothing will drain the rest: drop them and say so.
                 if !self.runningThreadIds.contains(threadId), let rest = self.queuedMessages.removeValue(forKey: threadId) {
                     for channel in Set(rest.compactMap(\.replyVia)) {
@@ -1302,6 +1331,79 @@ final class AppModel {
                     }
                 }
             }
+        }
+    }
+
+    /// Start the tasks a coordinator thread wrote to its outbox (see `Dispatch`): new threads in the named projects,
+    /// or more instructions for threads it started. Problems go back to it as a message while it has budget left.
+    func startDispatchedTasks(from coordinatorId: UUID) {
+        let fm = FileManager.default
+        let dir = store.dispatchDir(for: coordinatorId)
+        let files = ((try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? [])
+            .filter { $0.pathExtension.lowercased() == "json" }
+            .sorted { $0.lastPathComponent < $1.lastPathComponent }
+        guard !files.isEmpty, let coordinator = threads.first(where: { $0.id == coordinatorId }),
+              coordinator.isCoordinator == true else { return }
+        var left = dispatchBudget[coordinatorId] ?? Dispatch.budget
+        var problems: [String] = []
+        for file in files {
+            let data = try? Data(contentsOf: file)
+            try? fm.removeItem(at: file)
+            let name = file.lastPathComponent
+            guard let data else { continue }
+            let tasks: [Dispatch.Task]
+            do {
+                tasks = try Dispatch.parse(data)
+            } catch {
+                problems.append("\(name): \(error)")
+                left -= 1 // so a coordinator that keeps writing broken files still runs out
+                continue
+            }
+            for task in tasks {
+                guard left > 0 else {
+                    problems.append("\(name): not started, no tasks left until the user writes to you")
+                    continue
+                }
+                left -= 1
+                let target: UUID
+                if let id = task.thread {
+                    guard threads.contains(where: { $0.id == id && $0.reportsTo == coordinatorId }) else {
+                        problems.append("\(name): thread \(id.uuidString) isn't one you started")
+                        continue
+                    }
+                    target = id
+                } else {
+                    var projectId: UUID?
+                    if let key = task.project {
+                        guard let p = project(named: key) else {
+                            problems.append("\(name): there's no project called \"\(key)\"")
+                            continue
+                        }
+                        projectId = p.id
+                    }
+                    target = createThread(projectId: projectId, select: false)
+                    updateThread(target) {
+                        $0.reportsTo = coordinatorId
+                        if let title = task.title { $0.title = String(title.prefix(80)) }
+                        $0.items.append(TranscriptItem(kind: .info, text: "Started by the coordinator thread \"\(coordinator.title)\". Each answer goes back there."))
+                    }
+                }
+                send(task.message, in: target, reportTo: coordinatorId)
+                if let t = threads.first(where: { $0.id == target }) {
+                    let place = project(for: t)?.name ?? "research"
+                    updateThread(coordinatorId) {
+                        $0.items.append(TranscriptItem(kind: .info, text: "→ Handed to \"\(t.title)\" (\(place))"))
+                    }
+                }
+            }
+        }
+        dispatchBudget[coordinatorId] = max(left, 0)
+        guard !problems.isEmpty else { return }
+        let text = "[Automate] Some tasks weren't started:\n" + problems.map { "- " + $0 }.joined(separator: "\n")
+        if left > 0 {
+            send(text, in: coordinatorId)
+        } else {
+            updateThread(coordinatorId) { $0.items.append(TranscriptItem(kind: .info, text: text, isError: true)) }
         }
     }
 

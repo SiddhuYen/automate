@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- **Coordinator threads**: switch on Coordinator in a thread and it can start threads in your projects and give
+  them more instructions. Each one's answer comes back to the coordinator, which decides what's next. Up to 25 tasks
+  per message you send it. Listed in Settings → Access.
 - **No starter loops**: new installs start empty (make loops with New Loop from Description, or the blank
   loop in the + menu), and the template gallery is gone. Loops you already have are untouched.
 - **Project loops**: a loop can live in a project's `.automate/loops/` folder, with its notes in
